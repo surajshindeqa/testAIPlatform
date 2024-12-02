@@ -1,0 +1,99 @@
+name: Run Playwright Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest  # Use an Ubuntu runner for the tests
+
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specify your Node.js version
+
+      - name: Setup Node.js
+        run : rm -rf node_modules package-lock.json
+
+      - name: Install Dependencies
+        run: npm cache clean --force
+
+      - name: Set up PulseAudio
+        run: |
+          sudo apt update
+          sudo apt install -y pulseaudio pulseaudio-utils ffmpeg
+
+      - name: Configure PulseAudio
+        run: |
+          # Set environment variable for PulseAudio
+          echo "PULSE_SERVER=localhost" >> $GITHUB_ENV
+          # Start PulseAudio in the background
+          pulseaudio --start
+          # Load null sink module for virtual mic
+          pactl load-module module-null-sink sink_name=virtual_sink
+          pactl load-module module-loopback source=virtual_sink.monitor
+
+      # Step 3: Install dependencies
+      - name: Install Dependencies
+        run: npm install
+
+      - name: List installed dependecie
+        run: npm list
+
+      - name: Install Playwright dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-0 libnss3 libgdk-pixbuf2.0-0 libx11-xcb1 \
+            libatk-bridge2.0-0 libatk1.0-0 libcups2 libxcomposite1 \
+            libxdamage1 libxrandr2 libasound2 libgbm1 libpango-1.0-0 \
+            libgtk-3-0 libxtst6 libnss3 libxss1 libgdk-pixbuf2.0-0 \
+            libappindicator3-1 libgdk-pixbuf2.0-0 libcanberra-gtk-module
+
+      # Step 4: Install Playwright Browsers
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+
+      # Step 5: Run Tests
+      - name: Run Tests
+        run: npm test
+
+      - name: generate report
+        run: allure generate allure-results --clean -o allure-report
+
+      # Optional: Save Playwright video/artifacts (if enabled in Playwright config)
+      - name: Upload Playwright Videos/Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-video
+          path: videos  # Path where Playwright saves video files
+
+      - name: Generate Allure Report
+        uses: simple-elf/allure-report-action@v1
+        with:
+          allure_results: allure-results
+          allure_report: allure-report
+            
+      - name: Upload Allure Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: allure-report
+          path: allure-report
+
+      - name: Deploy Allure report to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./allure-report
+
