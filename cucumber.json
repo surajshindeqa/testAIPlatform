@@ -1,0 +1,18 @@
+{
+    "default":{
+        "dryrun":true,
+        "formatOptions":{
+            "snippetInterface":"async-await"
+        },
+    "paths":["e2e/tests/features/*.feature"],
+    "require":["e2e/tests/steps/*.ts"],
+    "requireModule":[
+        "ts-node/register"
+    ],
+    "format":[
+        ["html","reports/html-formatter.html"],
+        ["allure-cucumberjs/reporter"],
+        ["json","reports/cucumber-report.json"]
+    ]
+    }
+}
