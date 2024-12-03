@@ -9,8 +9,10 @@ on:
       - main
 
 jobs:
-  test:
+  setup-and-run-tests:
     runs-on: ubuntu-latest  # Use an Ubuntu runner for the tests
+    strategy:
+      fail-fast: false
 
     steps:
       # Step 1: Checkout code
@@ -28,21 +30,6 @@ jobs:
 
       - name: Install Dependencies
         run: npm cache clean --force
-
-      - name: Set up PulseAudio
-        run: |
-          sudo apt update
-          sudo apt install -y pulseaudio pulseaudio-utils ffmpeg
-
-      - name: Configure PulseAudio
-        run: |
-          # Set environment variable for PulseAudio
-          echo "PULSE_SERVER=localhost" >> $GITHUB_ENV
-          # Start PulseAudio in the background
-          pulseaudio --start
-          # Load null sink module for virtual mic
-          pactl load-module module-null-sink sink_name=virtual_sink
-          pactl load-module module-loopback source=virtual_sink.monitor
 
       # Step 3: Install dependencies
       - name: Install Dependencies
@@ -69,31 +56,77 @@ jobs:
       - name: Run Tests
         run: npm test
 
-      - name: generate report
-        run: allure generate allure-results --clean -o allure-report
-
       # Optional: Save Playwright video/artifacts (if enabled in Playwright config)
       - name: Upload Playwright Videos/Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: test-video
           path: videos  # Path where Playwright saves video files
-
-      - name: Generate Allure Report
-        uses: simple-elf/allure-report-action@v1
-        with:
-          allure_results: allure-results
-          allure_report: allure-report
             
-      - name: Upload Allure Results
-        uses: actions/upload-artifact@v3
+      - name: Upload results to Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: allure-report
-          path: allure-report
+          name: allure-results-${{ matrix.shardIndex }} # name of the file you want to have once its uploaded
+          path: allure-results # path on the drive to where the reports are, from where to upload the files. 
+          retention-days: 10
 
       - name: Deploy Allure report to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./allure-report
+
+
+  generate-report:
+    # Merge reports after playwright tests, even if some shards have failed
+    if: always()
+    needs: [setup-and-run-tests]
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - name: Install dependencies
+      run: npm ci
+
+    - name: AWS cli setup
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-north-1
+
+    # We want a unique identifier to be used when we create subdirectories on our cloud for reports 
+    - name: Set a timestamp
+      id: timestampid
+      # this will store current time with UTC in outputs.timestamp (eg of value: 20231028_233147Z)
+      run: echo "timestamp=$(date --utc +%Y%m%d_%H%M%SZ)" >> "$GITHUB_OUTPUT" 
+
+    - name: Download allure results from GitHub Actions Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: allure-results* # pattern for multiple files previously stored as artifacts 
+        merge-multiple: true
+        path: merged-allure-results # name of the folder where ALL results will be extracted
+
+    # If you put the current history inside allure-results, Allure can generate a report that will merge history files
+    - name: Download current history files from S3
+      run: aws s3 cp s3://audirietestreports/history/ ./merged-allure-results/history --recursive
+
+    - name: Generate Allure report 
+      run: npx allure generate ./merged-allure-results
+
+    # Copy the history to the same S3 bucket to overwrite the previous history files with updated history
+    - name: Backup the history with the latest data
+      run: aws s3 cp ./allure-report/history s3://audirietestreports/history/  --recursive
+
+    - name: Deploy html report to S3
+      run: aws s3 cp ./allure-report s3://audirietestreports/report/${{ steps.timestampid.outputs.timestamp }}/ --recursive
+
+    - name: Write URL in summary
+      run: echo "### Test results - http://audirietestreports.s3-website.eu-north-1.amazonaws.com/report/${{ steps.timestampid.outputs.timestamp }}/index.html" >> $GITHUB_STEP_SUMMARY
 
